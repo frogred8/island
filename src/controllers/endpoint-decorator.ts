@@ -24,6 +24,10 @@ export interface EndpointSchemaOptions {
     sanitization?: any;
     validation?: any;
   };
+  session?: {
+    sanitization?: any;
+    validation?: any;
+  };
   result?: {
     sanitization?: any;
     validation?: any;
@@ -273,6 +277,7 @@ export namespace sanitize {
 
   export const query = makeDecorator<SanitizePropertyTypes>(sanitize, 'sanitization', 'query');
   export const body = makeDecorator<SanitizePropertyTypes>(sanitize, 'sanitization', 'body');
+  export const session = makeDecorator<SanitizePropertyTypes>(sanitize, 'sanitization', 'session');
   export const result = makeDecorator<SanitizePropertyTypes>(sanitize, 'sanitization', 'result');
 }
 
@@ -487,6 +492,7 @@ export namespace validate {
 
   export const query = makeDecorator<ValidatePropertyTypes>(validate, 'validation', 'query');
   export const body = makeDecorator<ValidatePropertyTypes>(validate, 'validation', 'body');
+  export const session = makeDecorator<ValidatePropertyTypes>(validate, 'validation', 'session');
   export const result = makeDecorator<ValidatePropertyTypes>(validate, 'validation', 'result');
 }
 

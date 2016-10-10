@@ -95,6 +95,7 @@ export default class Islet {
       })
       .then(() => logger.info('started'))
       .then(() => this.onStarted());
+      //test
   }
 
   protected onInitialized() {}

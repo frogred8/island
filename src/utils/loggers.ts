@@ -2,60 +2,102 @@ const cls = require('continuation-local-storage');
 import * as winston from 'winston';
 import * as _ from 'lodash';
 const config = require('winston/lib/winston/config');
+const sourceMapSupport = require('source-map-support');
+require('./loggers-bugfix');
 
+const ns = cls.getNamespace('app') || cls.createNamespace('app');
+
+function stringifyMeta(meta) {
+  return meta && (0 < Object.keys(meta).length) && JSON.stringify(meta) || undefined;
+}
 function getTattoo() {
-  const ns = cls.getNamespace('app') || cls.createNamespace('app');
   return ns.get('RequestTrackId') || '--------';
 }
 const shortFormatter = (options) => {
+  let meta = options.meta;
   const tattoo = getTattoo();
-  Error.stackTraceLimit = 5;
+  if (process.env.ISLAND_LOGGER_TRACE === 'true') {
+    const trace = getLogTrace();
+    meta = meta || {};
+    meta.file = trace.file;
+    meta.line = trace.line;
+  }
   return [
     config.colorize(options.level,`[${tattoo.slice(0, 8)}|${new Date().toTimeString().slice(0, 8)}|${options.level.slice(0, 1)}]`),
     `${options.message || ''}`,
-    `${options.meta && (JSON.stringify(options.meta))}`
+    stringifyMeta(meta)
   ].join(' ');
-}
+};
+(shortFormatter as any).type = 'short';
+
 const longFormatter = (options) => {
+  let meta = options.meta;
   const tattoo = getTattoo();
-  Error.stackTraceLimit = 10;
+  if (process.env.ISLAND_LOGGER_TRACE === 'true') {
+    const trace = getLogTrace();
+    meta = meta || {};
+    meta.file = trace.file;
+    meta.line = trace.line;
+  }
   return [
-    config.colorize(options.level, `[${tattoo.slice(0, 8)}]` + `${new Date().toISOString()}` + `${options.level}`),
+    config.colorize(options.level, `[${tattoo.slice(0, 8)}] ${new Date().toISOString()} ${options.level}`),
     `${options.message || ''}`,
-    `${options.meta && JSON.stringify(options.meta)}`
+    stringifyMeta(meta)
   ].join(' ');
-}
+};
+(longFormatter as any).type = 'long';
+
 const jsonFormatter = (options) => {
   const tattoo = getTattoo();
   const timestamp = Date.now();
-  return config.colorize(options.level, JSON.stringify({
+  const log: any = {
     tattoo, timestamp,
     msg: options.message, meta: options.meta, level: options.level, category: options.label
-  }));
+  };
+  if (process.env.ISLAND_LOGGER_TRACE === 'true') {
+    const { file, line } = getLogTrace();
+    log.file = file;
+    log.line = line;
+  }
+  return JSON.stringify(log);
+};
+(jsonFormatter as any).type = 'json';
+
+function getLogTrace() {
+  const E = Error as any;
+  const oldLimit = E.stackTraceLimit;
+  const oldPrepare = E.prepareStackTrace;
+  E.stackTraceLimit = 11;
+  const returnObject: any = {};
+  E.prepareStackTrace = function (o, stack) {
+    const caller = sourceMapSupport.wrapCallSite(stack[10]);
+    returnObject.file = caller.getFileName();
+    returnObject.line = caller.getLineNumber();
+  };
+  E.captureStackTrace(returnObject);
+  returnObject.stack;
+  E.stackTraceLimit = oldLimit;
+  E.prepareStackTrace = oldPrepare;
+  return returnObject;
 }
 
 const allTransports = [];
 
+let currentType: 'short' | 'long' | 'json' = process.env.ISLAND_LOGGER_TYPE || 'short';
+
 function createLogger(id) {
+  function makeTransport(formatter) {
+    return new winston.transports.Console({
+      name: formatter.type,
+      label: id,
+      formatter: formatter,
+      silent: currentType !== formatter.type
+    });
+  }
   const transports = [
-    new winston.transports.Console({
-      name: 'short',
-      label: id,
-      formatter: shortFormatter,
-      silent: false
-    }),
-    new winston.transports.Console({
-      name: 'long',
-      label: id,
-      formatter: longFormatter,
-      silent: true
-    }),
-    new winston.transports.Console({
-      name: 'json',
-      label: id,
-      formatter: jsonFormatter,
-      silent: true
-    })
+    makeTransport(shortFormatter),
+    makeTransport(longFormatter),
+    makeTransport(jsonFormatter)
   ];
   transports.forEach(t => allTransports.push(t));
   const logger = winston.loggers.add(id, {transports});
@@ -76,6 +118,7 @@ export namespace Loggers {
   }
 
   export function switchType(type: 'short' | 'long' | 'json') {
+    currentType = type;
     allTransports.forEach(t => {
       if (t.name !== type) {
         t.silent = true;
@@ -91,101 +134,3 @@ export namespace Loggers {
     return winston.loggers.has(id) && winston.loggers.get(id) || createLogger(id);
   }
 }
-
-
-
-/*
-TODO:
-Issue: https://github.com/winstonjs/winston/issues/862
-Date: 08/31/2016
-
-The fix is add below code before https://github.com/winstonjs/winston/blob/master/lib/winston/common.js#L217
-  + options.meta = meta;
-Need to have options.meta decycled before clone.
- */
-const cycle = require('cycle');
-const common = require('winston/lib/winston/common');
-common.log = function (options) {
-  var timestampFn = typeof options.timestamp === 'function'
-      ? options.timestamp
-      : common.timestamp,
-    timestamp   = options.timestamp ? timestampFn() : null,
-    showLevel   = options.showLevel === undefined ? true : options.showLevel,
-    meta        = options.meta !== null && options.meta !== undefined && !(options.meta instanceof Error)
-      ? common.clone(cycle.decycle(options.meta))
-      : options.meta || null,
-    output;
-
-  //
-  // raw mode is intended for outputing winston as streaming JSON to STDOUT
-  //
-  if (options.raw) {
-    if (typeof meta !== 'object' && meta != null) {
-      meta = { meta: meta };
-    }
-    output         = common.clone(meta) || {};
-    output.level   = options.level;
-    //
-    // Remark (jcrugzz): This used to be output.message = options.message.stripColors.
-    // I do not know why this is, it does not make sense but im handling that
-    // case here as well as handling the case that does make sense which is to
-    // make the `output.message = options.message`
-    //
-    output.message = options.message.stripColors
-      ? options.message.stripColors
-      : options.message;
-
-    return JSON.stringify(output);
-  }
-
-  //
-  // json mode is intended for pretty printing multi-line json to the terminal
-  //
-  if (options.json || true === options.logstash) {
-    if (typeof meta !== 'object' && meta != null) {
-      meta = { meta: meta };
-    }
-
-    output         = common.clone(meta) || {};
-    output.level   = options.level;
-    output.message = output.message || '';
-
-    if (options.label) { output.label = options.label; }
-    if (options.message) { output.message = options.message; }
-    if (timestamp) { output.timestamp = timestamp; }
-
-    if (options.logstash === true) {
-      // use logstash format
-      var logstashOutput = {};
-      if (output.message !== undefined) {
-        logstashOutput['@message'] = output.message;
-        delete output.message;
-      }
-
-      if (output.timestamp !== undefined) {
-        logstashOutput['@timestamp'] = output.timestamp;
-        delete output.timestamp;
-      }
-
-      logstashOutput['@fields'] = common.clone(output);
-      output = logstashOutput;
-    }
-
-    if (typeof options.stringify === 'function') {
-      return options.stringify(output);
-    }
-
-    return JSON.stringify(output, function (key, value) {
-      return value instanceof Buffer
-        ? value.toString('base64')
-        : value;
-    });
-  }
-
-  if (typeof options.formatter == 'function') {
-    options.meta = meta;
-    return String(options.formatter(common.clone(options)));
-  }
-
-  return output;
-};

@@ -4,6 +4,8 @@ import * as Promise from 'bluebird';
 import * as amqp from 'amqplib';
 import * as uuid from 'node-uuid';
 import { logger } from '../utils/logger';
+import { VisualizeLog } from '../utils/visualize';
+import { Events } from '../utils/event';
 import { AmqpChannelPoolService } from './amqp-channel-pool-service';
 import { Message, Event, EventHandler, Subscriber, EventSubscriber, PatternSubscriber } from './event-subscriber';
 import reviver from '../utils/reviver';
@@ -48,6 +50,9 @@ export class EventService {
         return Promise.map([this.roundRobinQ, this.fanoutQ], queue => {
           return this.registerConsumer(channel, queue);
         });
+      })
+      .then(() => {
+        this.publishEvent(new Events.SystemNodeStarted({name: this.fanoutQ, island: this.serviceName}));
       });
   }
 
@@ -80,30 +85,21 @@ export class EventService {
     const subscribers = this.subscribers.filter(subscriber => subscriber.isRoutingKeyMatched(msg.fields.routingKey));
     return Promise.map(subscribers, subscriber => {
       return enterScope({RequestTrackId: tattoo, Context: msg.fields.routingKey, Type: 'event'}, () => {
-        const visualizeLog: any = {
-          tattoo,
-          ts: {
-            c: msg.properties.timestamp,
-            r: +(new Date())
-          },
-          size: msg.content.byteLength,
-          from: headers.from,
-          to: {
-              node: process.env.HOSTNAME,
-              context: msg.fields.routingKey,
-              island: this.serviceName,
-              type: 'event'
-          }
-        };
+        const log = new VisualizeLog(tattoo, msg.properties.timestamp);
+        log.size = msg.content.byteLength;
+        log.from = headers.from;
+        log.to = { node: process.env.HOSTNAME, context: msg.fields.routingKey, island: this.serviceName, type: 'event' };
+
         return subscriber.handleEvent(content, msg)
           .then(() => {
-            visualizeLog.ts.e = +(new Date());
-            visualizeLog.error = false;
-            console.log(visualizeLog);
+            log.end();
           })
           .catch(e => {
-            visualizeLog.ts.e = +(new Date());
-            visualizeLog.error = true;
+            log.end(e);
+            throw e;
+          })
+          .finally(() => {
+            log.shoot();
           })
       });
     });
@@ -139,28 +135,41 @@ export class EventService {
         this.subscribers.push(subscriber);
       });
   }
+  
+  private _publish(exchange: string, routingKey: string, content, options): Promise<any> {
+    return this.channelPool.usingChannel(channel => {
+      return Promise.resolve(channel.publish(exchange, routingKey, content, options));
+    });
+  }
 
   //todo: implement unsubscribe
 
-  publishEvent<T extends Event<U>, U>(event: T): Promise<any> {
+  publishEvent<T extends Event<U>, U>(exchange: string, event: T): Promise<any>;
+  publishEvent<T extends Event<U>, U>(event: T): Promise<any>;
+  publishEvent(...args): Promise<any> {
+    let exchange = EventService.EXCHANGE_NAME;
+    let event: Event<{}>;
+    if (args.length === 1) {
+      event = args[0];
+    } else {
+      exchange = args[0];
+      event = args[1];
+    }
     const ns = cls.getNamespace('app');
     const tattoo = ns.get('RequestTrackId');
     const context = ns.get('Context');
     const type = ns.get('Type');
     logger.debug(`publish ${event.key}`, event.args, tattoo);
+    const options = {
+      timestamp: +new Date(),
+      headers: {
+        tattoo,
+        from: { node: process.env.HOSTNAME, context, island: this.serviceName, type }
+      }
+    };
     return Promise.try(() => new Buffer(JSON.stringify(event.args), 'utf8'))
       .then(content => {
-        return this.channelPool.usingChannel(channel => {
-          const headers = {
-            tattoo,
-            from: { node: process.env.HOSTNAME, context, island: this.serviceName, type }
-          };
-          const options = {
-            timestamp: +new Date(),
-            headers
-          }
-          return Promise.resolve(channel.publish(EventService.EXCHANGE_NAME, event.key, content, options));
-        });
+        return this._publish(EventService.EXCHANGE_NAME, event.key, content, options);
       });
   }
 }

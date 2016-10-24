@@ -1,6 +1,6 @@
 {
   "name": "island",
-  "version": "0.3.0",
+  "version": "0.3.4",
   "description": "A package suite for building microservice using TypeScript.",
   "main": "dist/index.js",
   "typings": "dist/index.d.ts",
@@ -28,6 +28,7 @@
     "mongoose": "^4.6.1",
     "msgpack5": "^3.4.0",
     "node-uuid": "^1.4.7",
+    "qs": "^6.2.1",
     "redis": "^2.6.2",
     "reflect-metadata": "^0.1.8",
     "restify": "^4.1.1",
@@ -41,6 +42,7 @@
     "gulp-istanbul": "^1.1.1",
     "gulp-jasmine": "^2.4.1",
     "gulp-sourcemaps": "^1.6.0",
-    "remap-istanbul": "^0.6.4"
+    "remap-istanbul": "^0.6.4",
+    "std-mocks": "^1.0.1"
   }
 }
